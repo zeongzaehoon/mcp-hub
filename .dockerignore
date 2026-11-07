@@ -1,0 +1,21 @@
+# Every image builds from the repo root (deploy/docker/Dockerfile.<service>, compose context ../..).
+.git
+.github
+.idea
+.claude
+.codex
+**/.venv
+**/__pycache__
+**/.pytest_cache
+**/.ruff_cache
+**/node_modules
+frontend/dist
+frontend/e2e-results
+env
+deploy
+docs
+examples
+history
+infra/terraform
+infra/terraform-ncp
+libs/rust-core/target

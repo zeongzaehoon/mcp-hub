@@ -1,0 +1,59 @@
+@import "tailwindcss";
+
+/* Design tokens — white canvas bounded by hairlines, one accent (blue) for emphasis, red reserved for danger/errors.
+   Grey scale follows the knitlog palette (#f4f4f4 … #141414) and is used only for small fills; shadows exist for dialogs only. */
+@theme {
+  --color-background: #ffffff;
+  --color-foreground: #1f1f1f;
+  --color-card: #ffffff;
+  --color-muted: #f4f4f4;
+  --color-muted-foreground: #595959;
+  --color-subtle: #8c8c8c;
+  --color-border: #d9d9d9;
+  --color-border-strong: #bfbfbf;
+  --color-primary: oklch(0.55 0.2 262);
+  --color-primary-foreground: oklch(0.99 0 0);
+  --color-primary-soft: oklch(0.955 0.025 262);
+  --color-destructive: oklch(0.55 0.2 25);
+  --color-destructive-foreground: oklch(0.99 0 0);
+  --color-destructive-soft: oklch(0.965 0.02 25);
+  --color-ring: oklch(0.55 0.2 262);
+  /* dark chrome (sidebar, table head, login backdrop) */
+  --color-sidebar: #141414;
+  --color-sidebar-hover: #262626;
+  --color-sidebar-foreground: #ffffff;
+  --color-sidebar-muted: #8c8c8c;
+  --color-table-head: #1f1f1f;
+  /* disabled fill / text for filled buttons */
+  --color-disabled: #d7d7d7;
+  --color-disabled-foreground: #f4f4f4;
+  --shadow-button: 0 1px 2px 0 rgba(0, 0, 0, 0.25);
+  --shadow-popup: 0 24px 24px -8px rgba(0, 0, 0, 0.2);
+  --font-sans:
+    "Pretendard Variable", Pretendard, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Apple SD Gothic Neo",
+    "Noto Sans KR", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background-color: var(--color-background);
+  color: var(--color-foreground);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* small uppercase mono eyebrow used for section labels */
+.eyebrow {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-muted-foreground);
+}

@@ -1,0 +1,31 @@
+# Admin console (Vite + React). Build context = repo root (compose: context ../..).
+#
+# Two targets:
+#   dev   — Vite dev server with HMR; the dev compose uses this (target: dev) and mounts frontend/src.
+#   serve — static build served by `serve -s` (SPA history fallback), no nginx; the image ECS runs.
+#           Routing to the backend stays in the gateway (/api/ -> backend), the console only calls relative /api
+#           when VITE_API_BASE is empty. The bundle inlines VITE_API_BASE at build time: pass it as a build arg
+#           only for a cross-origin deployment.
+
+# ── dev ───────────────────────────────────────────────────────────────────────
+FROM node:22-alpine AS dev
+WORKDIR /app
+COPY frontend/package.json ./
+RUN npm install
+COPY frontend/ ./
+EXPOSE 5173
+CMD ["npm", "run", "dev"]
+
+# ── build ─────────────────────────────────────────────────────────────────────
+FROM dev AS build
+ARG VITE_API_BASE=""
+ENV VITE_API_BASE=$VITE_API_BASE
+RUN npm run build
+
+# ── serve (static only) ───────────────────────────────────────────────────────
+FROM node:22-alpine AS serve
+WORKDIR /app
+RUN npm install -g serve@14.2.4
+COPY --from=build /app/dist ./dist
+EXPOSE 80
+CMD ["serve", "-s", "dist", "-l", "tcp://0.0.0.0:80"]

@@ -1,0 +1,15 @@
+# Standalone study stack: NOT part of the cluster compose in the repo root.
+#   cp .env.sample .env  (fill GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET / JWT_SECRET)
+#   docker compose up -d --build
+name: mcp-ts-google-example
+services:
+  mcp-ts-google:
+    build: .
+    env_file: [.env]
+    # loopback only; 9100 chosen to stay clear of the cluster's 19000 and other local projects
+    ports: ["127.0.0.1:9100:9100"]
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9100/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 10

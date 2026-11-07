@@ -1,0 +1,43 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Dependencies stand-in (DynamoDB Local, MinIO)
+        run: |
+          docker network create aws-local
+          docker compose -f ci/aws-local.ci.yml up -d --wait
+      - name: Stack
+        run: |
+          # tracked env/*.env carry dev values; secrets are throwaway per run (JWT_SECRET must be >= 32 bytes)
+          echo "JWT_SECRET=ci-$(openssl rand -hex 24)" > env/secrets/common.env
+          echo "REDIS_PASSWORD=$(openssl rand -hex 32)" > env/secrets/redis.env
+          make up
+          for _ in $(seq 1 60); do curl -fsS http://localhost:19000/healthz && break; sleep 2; done
+          curl -fsS http://localhost:19000/healthz
+      - name: Lint
+        run: make lint
+      - name: Unit + integration
+        run: make test
+      - name: End-to-end (MCP servers + gateway)
+        run: make e2e
+      - name: Browser e2e (admin console)
+        run: make e2e-ui
+      - name: Rust ↔ Python parity
+        run: make rust-parity
+      - name: Logs on failure
+        if: failure()
+        run: docker compose -f deploy/docker/docker-compose.yml logs --tail 200

@@ -1,0 +1,27 @@
+{
+  "name": "mcp-ts-google-example",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Study example: TypeScript MCP server with Google login (own OAuth 2.1 AS) and an outbound API tool",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "dev": "node --watch --experimental-strip-types src/index.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/express": "2.0.2",
+    "@modelcontextprotocol/node": "2.1.2",
+    "@modelcontextprotocol/server": "2.4.0",
+    "express": "5.3.0",
+    "google-auth-library": "11.3.3",
+    "jose": "6.2.15",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@types/express": "5.0.6",
+    "@types/node": "22.19.0",
+    "typescript": "5.9.3"
+  }
+}

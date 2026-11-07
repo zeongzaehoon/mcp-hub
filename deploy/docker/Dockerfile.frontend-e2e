@@ -1,0 +1,6 @@
+# Playwright runner for the admin-console e2e (compose profile e2e). Build context = repo root.
+FROM mcr.microsoft.com/playwright/python:v1.49.0-noble
+WORKDIR /e2e
+RUN pip install --no-cache-dir "playwright==1.49.0" pytest==8.3.3 pytest-playwright==0.6.2 httpx==0.28.1 cryptography==43.0.3
+COPY frontend/e2e/ ./
+CMD ["pytest", "-q", "-p", "no:cacheprovider", "--browser", "chromium"]

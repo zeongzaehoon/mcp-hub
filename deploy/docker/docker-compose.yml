@@ -1,0 +1,267 @@
+name: mcp-cluster
+
+# Local full stack. Run from the repo root through the Makefile (`make up`), which passes this file with -f; relative
+# paths below resolve against this directory, so the repo root is ../.. .
+#
+# Container env comes from the tracked env/<service>.env (local, non-secret values keyed by compose service name).
+# Real secrets live in env/secrets/<service>.env (gitignored; key list in the tracked .example) and are layered
+# last with `required: false`, so the stack starts without them on dev values and they win when present.
+# env/common.env is shared by backend and every mcp-*; `environment:` here keeps only wiring fixed by image/ports.
+#
+# Only `gateway` (nginx, host 19000) publishes a port to the network: see gateway.nginx.conf.template for the routing.
+# Loopback-only host ports (127.0.0.1, non-default numbers to avoid clashes with other projects):
+#   redis 6379 for host-side `make test`; sample datasources for inspecting fixture data with a local client:
+#   pg-sample 55432 · clickhouse 58123 (HTTP) / 59000 (native) · mongo 57017. Credentials: env/<service>.env.
+
+x-build: &build
+  context: ../..
+
+services:
+  redis:
+    image: redis:7-alpine
+    networks: [mcp-cluster]
+    # db1 is the whole authorization source: password required (env/redis.env), fed via stdin so it is not in `ps`
+    env_file:
+      - ../../env/redis.env
+      - { path: ../../env/secrets/redis.env, required: false }
+    command: ["sh", "-c", "printf 'requirepass \"%s\"\\n' \"$$REDIS_PASSWORD\" | exec redis-server - --save '' --appendonly no --databases 16"]
+    # loopback only: host-side tests (make test) use it, other machines on the network must not
+    ports: ["127.0.0.1:6379:6379"]
+    healthcheck:
+      test: ["CMD-SHELL", "REDISCLI_AUTH=\"$$REDIS_PASSWORD\" redis-cli ping | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  backend:
+    build:
+      <<: *build
+      dockerfile: deploy/docker/Dockerfile.backend
+    env_file:
+      - ../../env/common.env
+      - ../../env/backend.env
+      - ../../env/redis.env
+      - { path: ../../env/secrets/common.env, required: false }
+      - { path: ../../env/secrets/backend.env, required: false }
+      - { path: ../../env/secrets/redis.env, required: false }
+    depends_on:
+      redis: { condition: service_healthy }
+    networks: [mcp-cluster, aws-local]
+    volumes:
+      - ../../backend/app:/app/app:ro
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080", "--reload"]
+
+  frontend:
+    build:
+      <<: *build
+      dockerfile: deploy/docker/Dockerfile.frontend
+      target: dev
+    networks: [mcp-cluster]
+    env_file: [../../env/frontend.env]
+    volumes:
+      - ../../frontend/src:/app/src:ro
+    depends_on: [backend]
+
+  # Browser e2e for the admin console: `make e2e-ui` (compose profile e2e)
+  frontend-e2e:
+    build:
+      <<: *build
+      dockerfile: deploy/docker/Dockerfile.frontend-e2e
+    networks: [mcp-cluster]
+    profiles: [e2e]
+    env_file:
+      - ../../env/frontend-e2e.env
+      - { path: ../../env/secrets/frontend-e2e.env, required: false }
+    depends_on: [frontend, backend]
+    # failures keep a screenshot + Playwright trace in frontend/e2e-results/ (flaky runs must be diagnosable)
+    command: ["pytest", "-q", "-p", "no:cacheprovider", "--browser", "chromium", "-rfE", "--tb=short",
+              "--screenshot", "only-on-failure", "--tracing", "retain-on-failure", "--output", "/results"]
+    volumes:
+      - ../../frontend/e2e:/e2e:ro
+      - ../../frontend/e2e-results:/results
+
+  # The only published port: nginx routes by path to the containers below (gateway.nginx.conf.template).
+  gateway:
+    image: nginx:1.27-alpine
+    networks: [mcp-cluster]
+    ports: ["19000:80"]
+    # the stock entrypoint renders the template with these at start (see the template header)
+    environment:
+      MCP_UPSTREAM_FRONTEND: frontend:5173
+      MCP_UPSTREAM_BACKEND: backend:8080
+      MCP_UPSTREAM_GATEWAY: mcp-gateway:9000
+      MCP_UPSTREAM_POSTGRES: mcp-postgres:9001
+      MCP_UPSTREAM_CLICKHOUSE: mcp-clickhouse:9002
+      MCP_UPSTREAM_MONGO: mcp-mongo:9003
+      MCP_UPSTREAM_HACKER: mcp-hacker:9004
+    volumes:
+      - ./gateway.nginx.conf.template:/etc/nginx/templates/default.conf.template:ro
+    depends_on: [frontend, backend, mcp-gateway]
+
+  pg-sample:
+    image: postgres:16-alpine
+    networks: [mcp-cluster]
+    env_file: [../../env/pg-sample.env]
+    ports: ["127.0.0.1:55432:5432"]
+    volumes:
+      - ../../infra/postgres-sample:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8
+    networks: [mcp-cluster]
+    env_file: [../../env/clickhouse.env]
+    ports: ["127.0.0.1:58123:8123", "127.0.0.1:59000:9000"]
+    ulimits: { nofile: { soft: 262144, hard: 262144 } }
+    volumes:
+      - ../../infra/clickhouse-sample:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8123/ping | grep -q Ok"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  mcp-clickhouse:
+    build:
+      <<: *build
+      dockerfile: deploy/docker/Dockerfile.mcp-clickhouse
+    env_file:
+      - ../../env/common.env
+      - ../../env/mcp-clickhouse.env
+      - ../../env/redis.env
+      - { path: ../../env/secrets/common.env, required: false }
+      - { path: ../../env/secrets/redis.env, required: false }
+    environment:
+      SERVER_TYPE: clickhouse
+      PORT: "9002"
+    networks: [mcp-cluster, aws-local]
+    depends_on:
+      redis: { condition: service_healthy }
+      clickhouse: { condition: service_healthy }
+    volumes:
+      - ../../libs/common:/app/libs/common:ro
+      - ../../mcp-clickhouse/mcp_clickhouse:/app/mcp-clickhouse/mcp_clickhouse:ro
+
+  mongo:
+    image: mongo:7
+    networks: [mcp-cluster]
+    env_file: [../../env/mongo.env]
+    ports: ["127.0.0.1:57017:27017"]
+    volumes:
+      - ../../infra/mongo-sample:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mongosh --quiet -u \"$$MONGO_INITDB_ROOT_USERNAME\" -p \"$$MONGO_INITDB_ROOT_PASSWORD\" --eval \"db.adminCommand('ping').ok\""]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  mcp-mongo:
+    build:
+      <<: *build
+      dockerfile: deploy/docker/Dockerfile.mcp-mongo
+    env_file:
+      - ../../env/common.env
+      - ../../env/mcp-mongo.env
+      - ../../env/redis.env
+      - { path: ../../env/secrets/common.env, required: false }
+      - { path: ../../env/secrets/redis.env, required: false }
+    environment:
+      SERVER_TYPE: mongo
+      PORT: "9003"
+    networks: [mcp-cluster, aws-local]
+    depends_on:
+      redis: { condition: service_healthy }
+      mongo: { condition: service_healthy }
+    volumes:
+      - ../../libs/common:/app/libs/common:ro
+      - ../../mcp-mongo/mcp_mongo:/app/mcp-mongo/mcp_mongo:ro
+
+  mcp-hacker:
+    build:
+      <<: *build
+      dockerfile: deploy/docker/Dockerfile.mcp-hacker
+    env_file:
+      - ../../env/common.env
+      - ../../env/mcp-hacker.env
+      - ../../env/redis.env
+      - { path: ../../env/secrets/common.env, required: false }
+      - { path: ../../env/secrets/redis.env, required: false }
+    environment:
+      SERVER_TYPE: hacker
+      PORT: "9004"
+    networks: [mcp-cluster, aws-local]
+    depends_on:
+      redis: { condition: service_healthy }
+      pg-sample: { condition: service_healthy }
+    volumes:
+      - ../../libs/common:/app/libs/common:ro
+      - ../../mcp-hacker/mcp_hacker:/app/mcp-hacker/mcp_hacker:ro
+
+  # One MCP endpoint for all servers a key may use: lists/forwards with the caller's key, upstreams authorize.
+  mcp-gateway:
+    build:
+      <<: *build
+      dockerfile: deploy/docker/Dockerfile.mcp-gateway
+    env_file:
+      - ../../env/common.env
+      - ../../env/mcp-gateway.env
+      - ../../env/redis.env
+      - { path: ../../env/secrets/common.env, required: false }
+      - { path: ../../env/secrets/mcp-gateway.env, required: false }
+      - { path: ../../env/secrets/redis.env, required: false }
+    environment:
+      PORT: "9000"
+    networks: [mcp-cluster, aws-local]
+    depends_on:
+      redis: { condition: service_healthy }
+      mcp-postgres: { condition: service_started }
+      mcp-clickhouse: { condition: service_started }
+      mcp-mongo: { condition: service_started }
+      mcp-hacker: { condition: service_started }
+    volumes:
+      - ../../libs/common:/app/libs/common:ro
+      - ../../mcp-gateway/mcp_gateway:/app/mcp-gateway/mcp_gateway:ro
+
+  mcp-postgres:
+    build:
+      <<: *build
+      dockerfile: deploy/docker/Dockerfile.mcp-postgres
+    env_file:
+      - ../../env/common.env
+      - ../../env/mcp-postgres.env
+      - ../../env/redis.env
+      - { path: ../../env/secrets/common.env, required: false }
+      - { path: ../../env/secrets/redis.env, required: false }
+    environment:
+      SERVER_TYPE: postgres
+      PORT: "9001"
+    networks: [mcp-cluster, aws-local]
+    depends_on:
+      redis: { condition: service_healthy }
+      pg-sample: { condition: service_healthy }
+    volumes:
+      - ../../libs/common:/app/libs/common:ro
+      - ../../mcp-postgres/mcp_postgres:/app/mcp-postgres/mcp_postgres:ro
+
+  # Stand-in OIDC provider for trying company SSO locally (`docker compose --profile mock-idp up -d mock-idp`), always on
+  # in the e2e stack. Issuer http://mock-idp:8080/default; its login page accepts any username + a JSON claims box.
+  # Register it in the console: issuer as above, any client id/secret, domains = the email domain you will type.
+  mock-idp:
+    image: ghcr.io/navikt/mock-oauth2-server:2.1.10
+    networks: [mcp-cluster]
+    profiles: [mock-idp]
+    environment:
+      SERVER_PORT: "8080"
+      LOG_LEVEL: WARN
+    # loopback only, for a host browser; containers use mock-idp:8080
+    ports: ["127.0.0.1:28080:8080"]
+
+networks:
+  mcp-cluster:
+    name: mcp-cluster
+  aws-local:
+    external: true   # created by ~/dev/aws-local (docker compose up -d there first)

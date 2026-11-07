@@ -1,0 +1,76 @@
+# gateway (nginx): the only published port of the dev stack (host 19000 -> :80). Everything else is reached by
+# docker-compose service name on the mcp-cluster network; no other container publishes a port to the network
+# (redis and the sample datasources keep loopback-only host ports for host-side tests and data inspection).
+#
+#   /mcp-<type>            -> mcp-<type>:900x/mcp   direct per-server MCP endpoint (?server=<id> is kept)
+#   /mcp-<type>/metrics    -> mcp-<type>:900x/metrics   that server's Prometheus metrics
+#   /mcp, OAuth, /metrics  -> mcp-gateway:9000      single MCP endpoint + OAuth 2.1 (API-key consent)
+#   /api/, /healthz, /docs -> backend:8080          admin API (same origin as the console: no CORS needed)
+#   /                      -> frontend:5173         admin console (Vite dev server + HMR websocket)
+#
+# This is an envsubst template: the stock nginx entrypoint renders /etc/nginx/templates/*.template at start and
+# replaces only the ${VARS} that exist in the container environment (nginx's own $vars are left alone).
+# Upstream addresses come from MCP_UPSTREAM_* (defaults in docker-compose.yml), so the same file serves another
+# layout (e.g. a static frontend image on :80) without editing. Upstreams are nginx variables so they are resolved
+# through Docker DNS per request (valid=10s): a rebuilt container gets a new IP and nginx must not keep the old one,
+# and nginx starts even if an upstream is still down.
+#
+# Local compose only. On ECS the ALB + the infra team's gateway take this role; carry the routing rules over, swap
+# the resolver (127.0.0.11 Docker DNS -> VPC DNS 169.254.169.253) and the upstream names (Cloud Map), TLS ends at the ALB.
+
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ''      close;
+}
+
+server {
+    listen 80;
+    server_name _;
+
+    resolver 127.0.0.11 valid=10s ipv6=off;
+    client_max_body_size 32m;
+
+    proxy_http_version 1.1;
+    proxy_set_header Host              $http_host;
+    proxy_set_header X-Real-IP         $remote_addr;
+    proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-Host  $http_host;
+    proxy_set_header Upgrade           $http_upgrade;
+    proxy_set_header Connection        $connection_upgrade;
+    # Streamable HTTP / SSE: stream responses as they are produced; tool calls (compute, report) can take a while
+    proxy_buffering    off;
+    proxy_cache        off;
+    proxy_read_timeout 300s;
+    proxy_send_timeout 300s;
+
+    # ── direct MCP endpoints (one per datasource server) ──
+    location = /mcp-postgres   { set $up ${MCP_UPSTREAM_POSTGRES};   proxy_pass http://$up/mcp$is_args$args; }
+    location = /mcp-clickhouse { set $up ${MCP_UPSTREAM_CLICKHOUSE}; proxy_pass http://$up/mcp$is_args$args; }
+    location = /mcp-mongo      { set $up ${MCP_UPSTREAM_MONGO};      proxy_pass http://$up/mcp$is_args$args; }
+    location = /mcp-hacker     { set $up ${MCP_UPSTREAM_HACKER};     proxy_pass http://$up/mcp$is_args$args; }
+    location = /mcp-postgres/metrics   { set $up ${MCP_UPSTREAM_POSTGRES};   proxy_pass http://$up/metrics; }
+    location = /mcp-clickhouse/metrics { set $up ${MCP_UPSTREAM_CLICKHOUSE}; proxy_pass http://$up/metrics; }
+    location = /mcp-mongo/metrics      { set $up ${MCP_UPSTREAM_MONGO};      proxy_pass http://$up/metrics; }
+    location = /mcp-hacker/metrics     { set $up ${MCP_UPSTREAM_HACKER};     proxy_pass http://$up/metrics; }
+
+    # ── mcp-gateway: single MCP endpoint + OAuth 2.1 routes (GATEWAY_PUBLIC_URL = this host) ──
+    location = /mcp          { set $up ${MCP_UPSTREAM_GATEWAY}; proxy_pass http://$up$request_uri; }
+    location /.well-known/   { set $up ${MCP_UPSTREAM_GATEWAY}; proxy_pass http://$up$request_uri; }
+    location = /authorize    { set $up ${MCP_UPSTREAM_GATEWAY}; proxy_pass http://$up$request_uri; }
+    location = /token        { set $up ${MCP_UPSTREAM_GATEWAY}; proxy_pass http://$up$request_uri; }
+    location = /register     { set $up ${MCP_UPSTREAM_GATEWAY}; proxy_pass http://$up$request_uri; }
+    location = /revoke       { set $up ${MCP_UPSTREAM_GATEWAY}; proxy_pass http://$up$request_uri; }
+    location /oauth/         { set $up ${MCP_UPSTREAM_GATEWAY}; proxy_pass http://$up$request_uri; }
+    location = /metrics      { set $up ${MCP_UPSTREAM_GATEWAY}; proxy_pass http://$up$request_uri; }
+
+    # ── backend admin API ──
+    location /api/           { set $up ${MCP_UPSTREAM_BACKEND}; proxy_pass http://$up$request_uri; }
+    location = /healthz      { set $up ${MCP_UPSTREAM_BACKEND}; proxy_pass http://$up$request_uri; }
+    location = /docs         { set $up ${MCP_UPSTREAM_BACKEND}; proxy_pass http://$up$request_uri; }
+    location = /openapi.json { set $up ${MCP_UPSTREAM_BACKEND}; proxy_pass http://$up$request_uri; }
+    location = /redoc        { set $up ${MCP_UPSTREAM_BACKEND}; proxy_pass http://$up$request_uri; }
+
+    # ── admin console (Vite dev server; HMR websocket upgrades pass through) ──
+    location / { set $up ${MCP_UPSTREAM_FRONTEND}; proxy_pass http://$up$request_uri; }
+}

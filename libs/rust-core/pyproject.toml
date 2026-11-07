@@ -1,0 +1,13 @@
+[build-system]
+requires = ["maturin>=1.7,<2"]
+build-backend = "maturin"
+
+[project]
+name = "mcpcluster-core"
+version = "0.1.0"
+requires-python = ">=3.12"
+description = "CPU-bound helpers for mcp-cluster servers (PII redaction, hashing) — Rust via PyO3"
+
+[tool.maturin]
+features = ["pyo3/extension-module"]
+module-name = "mcpcluster_core"

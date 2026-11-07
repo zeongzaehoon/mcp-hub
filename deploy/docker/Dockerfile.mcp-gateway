@@ -1,0 +1,15 @@
+# Single MCP endpoint in front of every datasource server. No datasource drivers, no Rust core:
+# it only lists and forwards; the upstream servers authorize and execute.
+FROM python:3.12-slim
+ENV PYTHONUNBUFFERED=1 UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+WORKDIR /app
+COPY libs/common ./libs/common
+WORKDIR /app/mcp-gateway
+COPY mcp-gateway/pyproject.toml mcp-gateway/uv.lock* ./
+RUN uv sync --no-dev
+COPY mcp-gateway/mcp_gateway ./mcp_gateway
+COPY mcp-gateway/tests ./tests
+ENV PATH="/app/mcp-gateway/.venv/bin:$PATH"
+EXPOSE 9000
+CMD ["python", "-m", "mcp_gateway.server"]

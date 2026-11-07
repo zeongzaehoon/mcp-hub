@@ -1,0 +1,24 @@
+# --- Rust extension (mcpcluster_core) -------------------------------------------------------
+FROM ghcr.io/pyo3/maturin:latest AS rust
+WORKDIR /build
+COPY libs/rust-core ./rust-core
+RUN cd rust-core && maturin build --release --interpreter python3.12 -o /wheels
+
+# --- server ----------------------------------------------------------------------------------
+FROM python:3.12-slim
+# Korean-capable font for charts/reports (NanumGothic, ~10MB); vl-convert has no system font fallback
+RUN apt-get update && apt-get install -y --no-install-recommends fonts-nanum && rm -rf /var/lib/apt/lists/*
+ENV PYTHONUNBUFFERED=1 UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+WORKDIR /app
+COPY libs/common ./libs/common
+WORKDIR /app/mcp-mongo
+COPY mcp-mongo/pyproject.toml mcp-mongo/uv.lock* ./
+RUN uv sync --no-dev
+COPY --from=rust /wheels /wheels
+RUN uv pip install /wheels/*.whl
+COPY mcp-mongo/mcp_mongo ./mcp_mongo
+COPY mcp-mongo/tests ./tests
+ENV PATH="/app/mcp-mongo/.venv/bin:$PATH"
+EXPOSE 9003
+CMD ["python", "-m", "mcp_mongo.server"]

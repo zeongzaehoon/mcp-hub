@@ -1,0 +1,32 @@
+.env
+.idea/
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.ruff_cache/
+node_modules/
+dist/
+.DS_Store
+data/
+
+# terraform
+**/.terraform/
+*.tfstate
+*.tfstate.*
+
+# browser e2e failure artifacts
+frontend/e2e-results/
+
+# env/<service>.env is tracked (local, non-secret values). Real secrets: env/secrets/<service>.env, local only;
+# the key list is the tracked .example next to it.
+/env/secrets/*.env
+!/env/secrets/*.env.example
+
+# agent/editor state and local work logs: not part of the project
+.claude/
+.codex/
+.mcp.json
+AGENTS.md
+LOOP.md
+history/

@@ -1,0 +1,21 @@
+[project]
+name = "mcp-mongo"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+  "mcpcluster-common",
+  "pymongo>=4.9",
+  "polars>=1.0",
+]
+
+[dependency-groups]
+dev = ["pytest>=8", "pytest-asyncio>=0.24", "httpx>=0.27"]
+
+[tool.uv.sources]
+mcpcluster-common = { path = "../libs/common", editable = true }
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["."]
+markers = ["e2e: requires running compose stack"]
