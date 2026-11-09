@@ -1,14 +1,9 @@
 # FTG MCP-Cluster
-FTG MCP-Cluster는 회사 리소스를 내부·외부 고객이 AI 클라이언트(ChatGPT / OpenAI API, Claude Desktop, Claude Code 등)로 접근하게 하는 멀티테넌트 MCP 서버 클러스터로 다음과 같은 주요 기능을 가져야 한다.
-- 회사 → 사용자 → 서버 권한 계층, 테넌트 바인딩, API 키 관리 콘솔
-- 테넌트 격리된 데이터 조회 (postgres / clickhouse / mongo / hacker)
-- 데이터 정제(`transform`), Rust 수치 분석(`compute`), 내보내기(`export`)
-- S3 산출물 저장소, 시각화(`chart`), 여러 서버를 묶는 보고서 PDF·DOCX·PPTX(`report`), 모니터링(MCP 조회 전용) — 🔜
-- 단일 게이트웨이 + OAuth 2.1로 모든 MCP 클라이언트 지원
-- 콘솔 대시보드(통계 타일·서버 헬스·24h 메트릭·이벤트 피드·산출물 목록): 읽기 전용, 권한 경로와 무관. 헬스 체크 대상은 env `MCP_INTERNAL_*` 만(서버 레코드 endpoint 는 fetch 금지)
-- 커넥터 SSO(회사별 OIDC, Google Workspace 등): 인증만 외부 IdP, 인가는 ServerAccess 그대로. 로그인은 사용자 명의의 만료 세션 키로 표현. **콘솔에는 SSO 로그인이 없다** — 운영자(CTO·개발자)는 이메일·비밀번호. Workspace 디렉터리는 운영자가 등록한 서비스 계정(도메인 전체 위임)으로 동기화
+회사 리소스를 AI 클라이언트(ChatGPT / OpenAI API, Claude Desktop, Claude Code 등)로 안전하게 쓰게 하는 멀티테넌트 MCP 서버 클러스터. 무엇을 하는지·실행법은 [README.md](README.md), 설계 상세는 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), 결정 사항·로드맵은 [docs/PROJECT.md](docs/PROJECT.md), 운영(ECS)은 [docs/DEPLOY.md](docs/DEPLOY.md).
 
-목표·설계·결정 사항·로드맵: [docs/PROJECT.md](docs/PROJECT.md) / 설계 상세: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) / 실행법: [README.md](README.md)
+코드로는 안 보이는 결정 두 가지(docs/PROJECT.md 결정 15·16):
+- 콘솔 대시보드는 읽기 전용이고 권한 경로와 무관하다. 헬스 체크 대상은 env `MCP_INTERNAL_*` 만이며 서버 레코드의 `endpoint` 는 fetch 하지 않는다.
+- **콘솔에는 SSO 로그인이 없다.** 운영자(CTO·개발자)는 이메일·비밀번호. SSO 는 MCP 커넥터 전용(인증만 외부 IdP, 인가는 ServerAccess 그대로, 사용자 명의 만료 세션 키). Workspace 디렉터리는 운영자가 등록한 서비스 계정(도메인 전체 위임)으로 동기화한다.
 
 
 ## 0. 작업 지침
@@ -42,62 +37,17 @@ FTG MCP-Cluster는 회사 리소스를 내부·외부 고객이 AI 클라이언�
 
 ### 0.5 온톨로지 기록
 - 개발 작업을 완료하면, 구현한 내용(개념·결정·컴포넌트·API·보안 발견 등)을
-- Obsidian 볼트에 온톨로지 노트로 기록한다. 스키마와 절차는 `ontology-note` 스킬을 따른다.
+- Obsidian 볼트에 온톨로지 노트로 기록한다. 스키마와 절차는 `wiki-note` 스킬을 따른다.
 
 
-## 1. 프로젝트 구조
-```text
-┌──────────────────────────────────────────────────────────────────────┐
-│  MCP Clients: ChatGPT · OpenAI API · Claude Desktop · Claude Code …  │
-└───────────────────────────────┬──────────────────────────────────────┘
-                                │ Streamable HTTP + Bearer mcpk_… / OAuth 2.1
-                                ▼
-                    ┌───────────────────────┐
-                    │  gateway (nginx) :19000 │  유일한 공개 포트: / 콘솔 · /api/v1 · /mcp · /mcp-<type>
-                    └───────────┬───────────┘
-                    ┌───────────┴───────────┐
-                    │  mcp-gateway :9000     │  단일 MCP 엔드포인트 / OAuth (/mcp)
-                    └───────────┬───────────┘
-        ┌───────────────┬───────┴───────┬────────────────┐
-        ▼               ▼               ▼                ▼
-┌──────────────┐ ┌──────────────┐ ┌─────────────┐ ┌─────────────┐
-│ mcp-postgres │ │mcp-clickhouse│ │  mcp-mongo  │ │ mcp-hacker  │   FastMCP
-│ /mcp-postgres│ │/mcp-clickhouse│ │  /mcp-mongo │ │ /mcp-hacker │
-└──────┬───────┘ └──────┬───────┘ └──────┬──────┘ └──────┬──────┘
-       └────────────────┴───────┬────────┴───────────────┘
-                                │ mcpcluster_common: TenantAuthMiddleware · guards ·
-                                │ transform · compute · export · chart🔜 · report🔜 · monitor🔜
-                                │ mcpcluster_core (Rust/PyO3): PII · hash · compute kernels
-          ┌─────────────────────┼─────────────────────┐
-          ▼                     ▼                     ▼
-┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐
-│ Redis            │  │ 고객 datasource   │  │ S3 객체저장소     │
-│ db1 authz 투영    │  │ 테넌트 고정 커넥션  │  │ export·artifact· │
-│                  │  │                  │  │ report           │
-│ db2 캐시·rate    │  └──────────────────┘  │ presigned URL    │
-│ db3 접근로그 stream│                        └──────────────────┘
-└────────▲─────────┘
-         │ outbox → projection (version guard) / reconciler
-┌────────┴─────────┐      ┌──────────────────┐      ┌──────────────────┐
-│ backend FastAPI  │◀────▶│ DynamoDB         │      │ frontend React   │
-│  /api/v1 (:8080) │      │ 단일테이블 + logs  │      │ 관리 콘솔 / (:5173)│
-└────────▲─────────┘      └──────────────────┘      └────────┬─────────┘
-         └───────────────────────────────────────────────────┘
-```
-
-| 분류 | 사용할 도구 | 고려사항 |
-|------|------------|---------|
-| UI | React + TS (Vite), React Query, Zustand, shadcn | 대량 데이터 목록 — 검색·필터·커서 페이지네이션. 디자인: 무채색 + 강조 1색(블루), 빨강은 위험·오류 전용. 토큰은 `frontend/src/index.css` `@theme`, 화면 코드에 hue 클래스 직접 사용 금지(docs/PROJECT.md 결정 14) |
-| API | FastAPI (async) | DynamoDB 단일 진실 원천, 쓰기는 `TransactWriteItems` + `ConditionCheck` |
-| Database | DynamoDB (`~/dev/aws-local` 공유) | 단일 테이블, 낙관적 잠금(`version`), `UNIQ#` 마커 |
-| Cache | Redis 7 | db1 authz 투영 / db2 핫캐시·rate limit / db3 접근 로그 stream |
-| MCP | FastMCP (Streamable HTTP, stateless) | 서버는 datasource 종류별 범용, 고객 차이는 바인딩으로 |
-| Dataframe | polars, duckdb | 정제는 polars, 큰 집계는 duckdb |
-| CPU 연산 | Rust (PyO3 + rayon, maturin) | 수치 연산은 Rust 커널, Python 미러 + parity 테스트 |
-| Storage | S3 API (dev: `~/dev/aws-local` MinIO, 운영: AWS S3 / NCP Object Storage) | 서버 간 결과는 `artifact_id`로 S3 경유, 반출은 presigned URL |
-| 시각화 🔜 | Vega-Lite + `vl-convert-python` (Rust 휠) | 브라우저 없이 PNG/SVG, 외부 URL 로딩 금지 |
-| 보고서 🔜 | PDF `typst` 휠 / DOCX `python-docx` / PPTX `python-pptx` | 가벼운 pip 휠만. 헤드리스 브라우저·LibreOffice 금지 |
-| 알림 🔜 | `Notifier` 포트 (현재 채널 없음) | Slack·메일은 구현 추가만으로 확장 |
+## 1. 기술 선택 규칙
+구성도·컴포넌트 설명은 docs/ARCHITECTURE.md 에 있다. 여기는 코드를 쓸 때 지킬 규칙만 적는다.
+- **UI**(React + TS, React Query, Zustand, shadcn): 목록은 검색·필터·커서 페이지네이션. 디자인은 무채색 + 강조 1색(블루), 빨강은 위험·오류 전용. 토큰은 `frontend/src/index.css` `@theme` 한 곳, 화면 코드에 hue 클래스 직접 사용 금지(docs/PROJECT.md 결정 14).
+- **API**(FastAPI async): DynamoDB 가 단일 진실 원천. 쓰기는 `TransactWriteItems` + `ConditionCheck`, 낙관적 잠금(`version`), `UNIQ#` 마커. Redis 는 db1 authz 투영 / db2 핫캐시·rate limit / db3 접근 로그 stream.
+- **MCP**(FastMCP, Streamable HTTP, stateless): 서버는 datasource 종류별 범용이고 고객 차이는 바인딩으로만 표현한다.
+- **데이터 처리**: 정제는 polars, 큰 집계는 duckdb. 수치 연산은 Rust 커널(PyO3 + rayon) + Python 미러 + parity 테스트.
+- **산출물**: 서버 간 결과는 `artifact_id` 로 S3 경유, 반출은 presigned URL. 차트는 Vega-Lite + `vl-convert-python`(외부 URL 로딩 금지), 보고서는 `typst`·`python-docx`·`python-pptx` 휠만 — 헤드리스 브라우저·LibreOffice 금지.
+- **알림**: `Notifier` 포트 뒤로만(현재 채널 없음).
 
 
 ## 2. 반드시 지킬 불변식
@@ -118,48 +68,15 @@ FTG MCP-Cluster는 회사 리소스를 내부·외부 고객이 AI 클라이언�
 
 
 ## 3. 개발 환경 규칙
-- 모든 개발·테스트는 docker-compose 기준. 먼저 `(cd ~/dev/aws-local && docker compose up -d)`.
-- 네트워크에 열리는 포트는 nginx `gateway` 19000 하나다. 그 외 호스트 포트는 전부 127.0.0.1 전용: redis 6379(호스트측 테스트), 샘플 datasource 확인용 pg-sample 55432 · clickhouse 58123/59000 · mongo 57017. 다른 프로젝트와의 충돌 때문에 고른 값이니 **기본값으로 되돌리지 말고, 0.0.0.0 으로 열지 마라.** 나머지 컨테이너는 서비스 이름으로만 통신하고 `deploy/docker/gateway.nginx.conf.template`이 경로(`/`, `/api/v1`, `/mcp`, `/mcp-<type>`)로 라우팅한다. 새 서버를 붙이면 nginx `location`과 compose의 `MCP_UPSTREAM_*`도 추가한다.
-- 도커 파일은 전부 `deploy/docker/`(compose·`Dockerfile.<서비스>`·nginx 템플릿, 빌드 컨텍스트는 레포 루트). `docker compose`를 직접 치지 말고 `make up/down/ps/logs`를 쓴다. 운영 계약은 `docs/DEPLOY.md`.
-- 컨테이너 env는 `env/<서비스>.env`를 **추적**한다(시크릿 없는 로컬 값, 서비스명 기준, `[ECS 에서도 주입]`/`[로컬 전용]` 구획, 코드 기본값과 같은 값은 적지 않음). 실 시크릿은 `env/secrets/<서비스>.env`(gitignore, 키 목록은 추적되는 `.example`)에만 두고 compose가 `required: false`로 뒤에 겹친다. 진짜 비밀번호·키를 `env/*.env`에 넣지 마라. 주석은 반드시 별도 줄에. docker compose는 인라인 `# 주석`을 값에 포함시킨다.
-- Python은 `uv`, 린트는 `ruff` (`make lint`). Rust 휠은 Dockerfile의 maturin 스테이지에서 빌드 (호스트 Rust 불필요).
+실행 절차·`make` 타깃은 README.md, 파일 역할은 deploy/docker/README.md 에 있다. 여기는 어기면 안 되는 것만 적는다.
+- 네트워크에 열리는 포트는 nginx `gateway` 19000 하나. 그 외 호스트 포트(redis 6379, pg-sample 55432, clickhouse 58123/59000, mongo 57017)는 127.0.0.1 전용이며 다른 프로젝트와의 충돌 때문에 고른 값이다. **기본값으로 되돌리지 말고, 0.0.0.0 으로 열지 마라.** 컨테이너끼리는 서비스 이름으로만 통신한다.
+- 새 MCP 서버를 붙이면 `deploy/docker/gateway.nginx.conf.template` 의 `location` 과 compose 의 `MCP_UPSTREAM_*` 도 추가한다. `docker compose` 를 직접 치지 말고 `make` 를 쓴다.
+- env: `env/<서비스>.env` 는 추적(시크릿 없는 로컬 값, `[ECS 에서도 주입]`/`[로컬 전용]` 구획, 코드 기본값과 같은 값은 적지 않음). 실 시크릿은 `env/secrets/<서비스>.env`(gitignore, 키 목록은 추적되는 `.example`)에만. 진짜 비밀번호·키를 `env/*.env` 에 넣지 마라. 주석은 반드시 별도 줄에 — compose 는 인라인 `# 주석` 을 값에 포함시킨다.
+- Python 은 `uv`, 린트는 `ruff`(`make lint`). Rust 휠은 Dockerfile 의 maturin 스테이지에서 빌드한다(호스트 Rust 불필요).
 - 클라이언트(ChatGPT·Claude·OpenAI) MCP 사양은 자주 바뀐다. 호환 작업 전 공식 문서로 최신 사양을 확인한다.
 
 
 ## 4. Agent
-작업내용이 Agent Team이나 Sub-Agent을 활용해야하는지 먼저 판단해라. 가능하면 복수의 에이전트가 함께 작업 내용을 공유하며 일하게끔 해라.
-에이전트 이름(`subagent_type` 에 그대로 사용, 정의는 `.claude/agents/`):
-- `ux-planner`: 화면 설계, 사용자 편리성 여부 판단 전문가
-- `product-owner`: 제품 기획. 필요한 기능 파악, 계획 수립 전문가
-- `frontend-developer`: web 화면 개발 전문가
-- `backend-developer`: api 개발, api 수정, api 내용 파악 및 공유 전문가 (backend + MCP 서버)
-- `infra-engineer`: docker, ecs 통한 서비스 환경 구성 및 관리 전문가
-- `qa-engineer`: 서비스 qa 진단 전문가 — 격리·권한·정지 전파 e2e 우선
-- `ai-engineer`: MCP 도구 설계(설명·스키마), 클라이언트 호환성, LLM 유도 전문가
-- `dba`: 서비스에 필요한 데이터 아키텍쳐 설계 전문가 (DynamoDB 키 설계, Redis 투영, S3 키 구조)
-
-### 4.1 Agent Team vs Sub-Agent — 무엇을 띄울지 먼저 판단
-"에이전트 팀으로" 라는 말은 **자동 트리거가 아니다.** 토폴로지는 어떤 도구를 호출하느냐로만 정해진다.
-tmux·터미널 환경은 이 선택과 무관하다.
-
-| 상황 | 메커니즘 | 특징 |
-|------|---------|------|
-| **독립 병렬 작업** (서로 대화 불필요) | `Agent()` 여러 번 (subagent fan-out) | 일회성·격리·결과 텍스트만 반환 |
-| **협업·토론·합의 필요** (서로 메시지 주고받음) | `TeamCreate` → `Agent(name, team_name, run_in_background:true)` → `SendMessage` | 지속·주소지정·팀 컨텍스트 공유 |
-
-판단 기준: **팀원끼리 서로의 중간 결과를 보고 반응해야 하면 Team, 각자 받은 일만 끝내면 되면 Sub-Agent.**
-
-### 4.2 Agent Team 표준 실행 프로토콜 (협업이 필요할 때 반드시 이 순서로 도구 호출)
-1. `TeamCreate` 로 팀 컨텍스트 생성.
-2. 역할별 에이전트를 `Agent(name="<역할>", team_name="<팀>", subagent_type="<해당 전문가>", run_in_background:true)` 로 띄운다.
-   - 한 메시지에서 여러 `Agent` 호출을 동시에 보내 동시 기동한다.
-3. 각 에이전트에게 **작업 전 계획표**를 먼저 작성하게 하고, 취합해 `/history/dev_log.md` 에 추가.
-4. 에이전트 간 의존·검토·합의는 `SendMessage({to: "<역할>"})` 로 진행한다. 단순 새 `Agent()` 호출은 컨텍스트가 단절되므로 협업에는 쓰지 않는다.
-5. 주고받은 메시지를 `/history/conversation_log.md` 에 **"누가 → 누구: 내용"** 형식으로 기록.
-6. 완료분은 `/history/complete_log.md` 에 취합.
-7. 작업 종료 시 `TeamDelete` 로 팀 정리.
-
-> 모든 팀원은 위 0.1~0.4 작업 지침(가정 명시·단순함·외과적 변경)과 2장 불변식을 동일하게 따른다.
-
-### 4.3 사용자가 그냥 "에이전트 팀으로 해줘" 라고만 했을 때
-구현 메커니즘을 되묻지 말고 **4.2 프로토콜을 기본값으로 실행**한다(팀원끼리 협업이 명백히 불필요한 단순 병렬이면 sub-agent fan-out으로 처리하고 그 사실을 한 줄로 알린다).
+작업이 Agent Team 이나 Sub-Agent 를 써야 하는지 먼저 판단하고, 가능하면 복수의 에이전트가 작업 내용을 공유하며 일하게 한다. 팀/서브에이전트 선택 기준과 팀 실행 프로토콜은 `agent-team` 스킬을 따른다.
+에이전트 이름(`subagent_type`, 정의는 `~/.claude/agents/`): `ux-planner`(화면 설계·편의성) · `product-owner`(기획·범위) · `frontend-developer` · `backend-developer`(backend + MCP 서버) · `infra-engineer`(docker·ECS) · `qa-engineer`(격리·권한·정지 전파 e2e 우선) · `ai-engineer`(MCP 도구 설계·클라이언트 호환) · `dba`(DynamoDB 키·Redis 투영·S3 키 구조) · `test-runner`(테스트 실행만).
+모든 팀원은 0장 작업 지침과 2장 불변식을 동일하게 따른다.

@@ -30,3 +30,6 @@ frontend/e2e-results/
 AGENTS.md
 LOOP.md
 history/
+
+# graphify knowledge-graph output (local)
+graphify-out/
